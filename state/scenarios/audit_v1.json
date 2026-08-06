@@ -1,0 +1,40 @@
+{
+  "project_id": "self-audit-001",
+  "project_name": "Hybrid-Orch Engine Self-Audit",
+  "current_step": "SOURCE_SCAN",
+  "step_index": 0,
+  "status": "in_progress",
+  "macro_steps": [
+    {
+      "id": 0,
+      "name": "SOURCE_SCAN",
+      "description": "Scan local repository for core components",
+      "status": "in_progress"
+    },
+    {
+      "id": 1,
+      "name": "ARCH_VALIDATION",
+      "description": "Analyze state transition rules and worker dependencies",
+      "status": "pending"
+    },
+    {
+      "id": 2,
+      "name": "CODE_QUALITY_CHECK",
+      "description": "Review exception handling and file lock logic",
+      "status": "pending"
+    },
+    {
+      "id": 3,
+      "name": "FINAL_REPORT",
+      "description": "Generate audit_report.md",
+      "status": "pending"
+    }
+  ],
+  "results": {
+    "SOURCE_SCAN": {},
+    "ARCH_VALIDATION": {},
+    "CODE_QUALITY_CHECK": {},
+    "FINAL_REPORT": {}
+  },
+  "logs": ["Starting SOURCE_SCAN: scanning for core components..."]
+}
