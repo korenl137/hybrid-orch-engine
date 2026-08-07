@@ -238,6 +238,31 @@ grep "agent returned \[SILENT\]" ~/.hermes/logs/agent.log
 
 ---
 
+## 10. 어디에 무엇을 저장하는가
+
+세 위치가 각자 다른 역할을 함. 헷갈리면 산출물이 `/tmp`나 엉뚱한 곳에 흩어짐(실측으로
+확인됨 — 아래 참고).
+
+| 위치 | 역할 |
+|---|---|
+| `~/.hermes/` | **Hermes 자신을 운영하는 데 필요한 것.** 설정(`config.yaml`, `.env`), 로그, 메모리, 세션, cron이 참조하는 스크립트(`scripts/`), 스킬(`skills/`), 훅(`hooks/`). "Hermes를 설정/개선한다"는 성격의 파일만. |
+| `~/hermes-agent-playbook/` (이 레포) | **Hermes *자체*에 대한 기록.** 사용법, 발견한 버그, 설정 튜닝 히스토리 — 이 문서. git으로 버전 관리됨. |
+| `~/workspace/projects/<주제-slug>/` | **Hermes와 *함께* 만든 결과물.** 시장조사, 레포 분석, 추론 기록, 코딩 산출물, 문서 정리, 실험 기록 등 — "Hermes로 만든 것." |
+| `~/workspace/shared/` | 여러 프로젝트가 공유하는 자원. |
+| `~/workspace/.venv` | Hermes가 Python 실행 시 기본으로 쓰는 uv 관리 가상환경. |
+
+**주의 — 이 관례는 Hermes에게 자동으로 적용되지 않습니다.** 실측 결과, `/goal`이나 일반
+요청으로 만든 산출물은 지시하지 않으면 `/tmp` 같은 임시 경로에 만들어졌습니다
+(`workspace/projects`, `workspace/shared`는 애초에 만든 이후 한 번도 안 쓰였음). 매번
+경로를 지정하기 번거로우면, Hermes의 memory에 이 규칙을 저장해두는 걸 권장:
+
+```
+앞으로 리서치·분석·코딩·문서 작업의 결과물은 항상 ~/workspace/projects/<주제-slug>/
+밑에 저장해라. 여러 프로젝트가 공유할 자원은 ~/workspace/shared/에 둬라.
+```
+
+---
+
 ## 부록 — 무엇이 무엇으로 대체됐는가 (삭제된 엔진 기준)
 
 | 삭제된 것 | 대체 |
