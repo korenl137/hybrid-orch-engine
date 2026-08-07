@@ -1,11 +1,25 @@
-# Hermes Agent 로컬 LLM 구축 가이드 (Gemma4-12B + Qwen3.6-35B-A3B 2모델 체제)
+# Hermes Agent 로컬 LLM 구축 가이드 (v15, Gemma4-12B + Qwen3.6-35B-A3B 2모델 체제)
 
 > 대상 하드웨어: AMD Ryzen 9 7900 / RTX 4070 SUPER 12GB / DDR5 32GB / Fractal Design Terra (ITX)
 > 구성: 연구실 PC(Windows 11 + WSL2 Ubuntu 24.04, 호스트) ↔ 집 데스크톱(Tailscale + Orca SSH, 클라이언트)
 >
-> 모델 구성을 단순화한 가이드입니다 — Bonsai 27B와 Ollama 기반 Hermes 4/3 폴백 조합을 모두 걷어내고, **비전 입력이 가능한 Gemma4-12B를 메인으로, 에이전틱 코딩에 특화된 Qwen3.6-35B-A3B(MoE)를 두 번째 모델로** 두는 2모델 체제로 정리했습니다. 두 모델 모두 llama.cpp 단일 빌드로 구동하고, 포트를 8000번으로 통일해 전환이 단순해졌습니다.
+> v14(Ternary Bonsai 27B 메인 전환판)에서 이어지는 세션 종합 개정판입니다. 이번 개정의 핵심은 **모델 구성을 단순화**한 것입니다 — Bonsai 27B와 Ollama 기반 Hermes 4/3 폴백 조합을 모두 걷어내고, **비전 입력이 가능한 Gemma4-12B를 메인으로, 에이전틱 코딩에 특화된 Qwen3.6-35B-A3B(MoE)를 두 번째 모델로** 두는 2모델 체제로 정리했습니다. 두 모델 모두 llama.cpp 단일 빌드로 구동하고, 포트를 8000번으로 통일해 전환이 단순해졌습니다.
 >
 > 위에서 아래로 그대로 실행하면 재작업 없이 완성됩니다.
+
+---
+
+> **문서 상태 안내 (README 우선)**: 이 문서는 외부에서 작성된 원본 구축 가이드(v15)를 그대로
+> 첨부한 것이며, 현재 운영 환경 기준으로 전부 검증된 것은 아닙니다. `README.md`와 내용이
+> 충돌하면 **`README.md`가 우선**합니다. 특히 아래 항목은 실제로 따라 하기 전 재확인하세요:
+> - **모델 quant**: 이 문서는 `unsloth/gemma-4-12b-it-GGUF`의 `UD-Q4_K_XL` 양자화를 받도록
+>   안내하지만, README 기준 현재 운영 모델명은 **Gemma 4-12B (IT, QAT Q4_0)**입니다. 같은
+>   빌드가 아닐 수 있으니 다운로드 전에 확인하세요.
+> - **`--repeat-penalty`**: 이 문서의 registry.yaml 예시에는 값이 없어 기본값 1.0으로
+>   동작합니다. README 7.1의 현재 운영 방침(기본 1.0, 폭주 증상 재현 시 1.1로 전환)과는
+>   방향은 같지만, registry 키 이름(`gemma4-12b` 등)을 포함한 세부 구조가 README가 실제로
+>   쓰는 설정과 다를 수 있습니다.
+> - 그 외 Slack/Telegram 연동 등 나머지 절차도 미검증 상태이니 단계별로 확인하며 진행하세요.
 
 ---
 
@@ -29,7 +43,7 @@ RTX 4070 SUPER가 정상 출력되면 통과입니다. 안 보이면 Windows에�
 
 ### 1-2. WSL2 메모리 할당량 조정 (빌드 중 OOM 예방)
 
-기본값은 호스트 RAM의 50%(32GB 중 16GB)로 제한돼 있습니다. CUDA 컴파일과 MoE 모델의 CPU 오프로드(`--n-cpu-moe`)가 메모리를 많이 쓰므로 미리 늘려둡니다. Windows `%UserProfile%\\.wslconfig`:
+기본값은 호스트 RAM의 50%(32GB 중 16GB)로 제한돼 있습니다. CUDA 컴파일과 MoE 모델의 CPU 오프로드(`--n-cpu-moe`)가 메모리를 많이 쓰므로 미리 늘려둡니다. Windows `%UserProfile%\.wslconfig`:
 ```ini
 [wsl2]
 memory=24GB
@@ -83,7 +97,7 @@ Host = Tailscale IP, User = `whoami` 결과값, Port = 22
 
 ---
 
-## 3. 하드웨어 제약과 VRAM 계산 (2모델 체제 기준)
+## 3. 하드웨어 제약과 VRAM 계산 (v15: 2모델 체제 기준으로 갱신)
 
 | 리소스 | 사양 |
 |---|---|
@@ -113,13 +127,13 @@ Hermes Agent는 **64,000 토큰 미만 컨텍스트로 등록된 모델은 provi
 |---|---|---|
 | Gemma4-12B (Q4_K_XL, 비전 포함) | `-c 131072 -np 1` | 약 8.5~9GB / 12GB (여유 약 3~3.5GB) |
 | Qwen3.6-35B-A3B (UD-Q4_K_XL, 비전+MTP) | `-c 131072 --n-cpu-moe 26 -np 1` | 12GB 근접 (커뮤니티 실측 45~110 tok/s대) |
-| (참고, 사용 중단) Ternary Bonsai 27B (Q2_0) | `-c 65536 --parallel 1` | 약 9.3GB — 비전 미지원으로 제외 |
+| (참고, 사용 중단) Ternary Bonsai 27B (Q2_0) | `-c 65536 --parallel 1` | 약 9.3GB — 비전 미지원으로 v15에서 제외 |
 
 **결론**: 두 모델(Gemma4-12B, Qwen3.6-35B-A3B) 모두 단독으로는 12GB 안에 들어오지만, **동시 상주는 불가능**합니다. 7장의 전환 스크립트로 번갈아 씁니다.
 
 ---
 
-## 4. 모델 선정 — 왜 이 2개인가
+## 4. 모델 선정 — 왜 이 2개인가 (v15)
 
 | 모델 | 역할 | 실행 방식 | 근거 |
 |---|---|---|---|
@@ -171,10 +185,12 @@ Choose a provider:
   Nous Subscription    ← 선택 금지 (클라우드, 유료)
 → Custom (OpenAI-compatible API)   ← 선택
 ```
+```
 API base URL: http://localhost:8000/v1
 API key: (비워두고 Enter)
 Detected model: gemma-4-12b-it (예시) — Use this model? Y
 Context length in tokens: 131072
+```
 
 **Terminal Backend**: Docker를 설치했으면 `docker`, 아니면 `local` 유지.
 **Messaging Platforms**: 스킵 (9~10장에서 별도 설정).
@@ -280,7 +296,7 @@ cd ~/llama.cpp
 ```
 - `-n`을 2048 이상으로 넉넉히 줄 것
 - 사고 과정 없이 빠른 답만 원하면 프롬프트 끝에 `/no_think` 추가
-- `-cnv --jinja`로 모델 내장 채팅 템플릿을 적용해야 사고 블록과 답변이 깔끔하게 분리됨
+- `-cnv --jinja`로 모델 내장 채팅 템플릿을 적용해야 사고 블록과 답변이 깔끔히 분리됨
 
 ---
 
@@ -416,7 +432,7 @@ wsl
 ```
 
 ### 8-3. Windows 부팅 시 WSL2 자동 실행
-작업 스케줄러 → 트리거 \"로그온할 때\" → 동작: `wsl.exe -d Ubuntu-24.04 -- echo booted`
+작업 스케줄러 → 트리거 "로그온할 때" → 동작: `wsl.exe -d Ubuntu-24.04 -- echo booted`
 
 ### 8-4. Gemma4-12B를 systemd로 상시 구동
 
@@ -481,7 +497,7 @@ Slack 프로필 → **⋮ → Copy member ID** (예: `U01ABC2DEF3`)
 ### 9-5. Hermes 설정
 ```bash
 # ~/.hermes/.env
-SLACK_BOT_TOKEN=«redacted:xox…»
+SLACK_BOT_TOKEN=xoxb-your-bot-token-here
 SLACK_APP_TOKEN=xapp-your-app-token-here
 SLACK_ALLOWED_USERS=U01ABC2DEF3
 ```
@@ -496,5 +512,114 @@ sudo hermes gateway install --system
 ```
 /invite @Hermes Agent
 ```
-"
 
+---
+
+## 10. Telegram 게이트웨이 연동
+
+### 10-1. 봇 생성
+1. Telegram에서 **@BotFather** 검색 → `/newbot`
+2. 표시 이름, `bot`으로 끝나는 username 입력
+3. 발급된 API 토큰 복사 — 유출 시 `/revoke`로 즉시 폐기
+
+### 10-2. 내 사용자 ID 확인
+Telegram에서 **@userinfobot**에게 메시지 → 숫자 ID 회신받음 (봇 토큰의 숫자와 다르니 혼동 주의)
+
+### 10-3. 그룹에서 쓸 경우 — Privacy Mode 해제
+1. @BotFather → `/mybots` → 봇 선택 → **Bot Settings → Group Privacy → Turn off**
+2. 봇을 그룹에서 제거 후 재초대 (설정 캐시 때문에 필수)
+
+### 10-4. Hermes 설정
+```bash
+# ~/.hermes/.env
+TELEGRAM_BOT_TOKEN=여기에_토큰
+TELEGRAM_ALLOWED_USERS=여기에_숫자ID
+```
+
+### 10-5. 게이트웨이 시작 및 검증
+```bash
+hermes gateway install
+hermes gateway
+```
+webhook이 비어있고(`"url":""`) `pending_update_count`가 0인 상태에서 시작하면 깨끗한 상태입니다. Telegram에서 봇에게 메시지를 보내 정상 응답을 확인하세요.
+
+### 10-6. 게이트웨이 상시 운용 vs 모델 전환 충돌 주의
+
+게이트웨이는 상시 프로세스이므로, 7~8장의 모델 전환과 겹칠 수 있습니다.
+- 게이트웨이를 상시 서비스로 쓸 계획이면 메인 모델(Gemma4-12B)도 상시 구동 유지, Qwen3.6-35B-A3B 전환은 트래픽 없는 시간대에만.
+- 여러 사람이 동시에 게이트웨이로 접근하면 `-np 1` 설정이 병목이 될 수 있음 — 이 경우 VRAM 재확인 후 `-np 2` + 컨텍스트 축소 트레이드오프를 검토하세요.
+
+---
+
+## 11. 리소스 운용 및 모델 선택 원칙
+
+| 상황 | 실행할 명령 | 근거 |
+|---|---|---|
+| 평소 서술형·비전·한국어 응답 | `llm-switch.sh use gemma4-12b` | 8.5~9GB로 VRAM 여유, 안정적 |
+| GitHub 이슈 해결, 터미널 자동화, 멀티스텝 에이전틱 코딩 | `llm-switch.sh use qwen35b` | SWE-bench 73.4, Terminal-Bench 51.5 |
+
+- 두 모델 동시 상주는 VRAM 부족으로 불가 — 전환 전 반드시 `pkill -f llama-server` 또는 `llm-switch.sh use`로 정리 후 새 모델을 띄웁니다.
+- 장시간 추론 시 `nvidia-smi -l 2`로 온도/메모리 모니터링.
+- 전환 후에는 항상 `curl http://localhost:8000/v1/models`로 실제 로드된 모델명을 재확인하세요. 포트가 고정돼 있어 겉으로는 구분이 안 됩니다.
+
+---
+
+## 12. 실행 및 테스트
+
+### 12-1. Hermes 실행 (데일리 루틴)
+```bash
+sudo systemctl status gemma4-llama          # 꺼져있으면 start
+curl http://localhost:8000/v1/models        # API 응답 확인
+cd ~/hermes-workspace
+hermes
+```
+
+### 12-2. 기본 응답 및 컨텍스트 확인
+```
+> 안녕, 너는 지금 어떤 모델로 동작하고 있어? 컨텍스트 길이도 알려줘.
+```
+
+### 12-3. 도구별 테스트 체크리스트
+
+| # | 테스트 | 프롬프트 예시 | 확인 사항 |
+|---|---|---|---|
+| 1 | 단일 도구 호출 | `오늘 날짜 기준 최신 GPU 뉴스 찾아줘` | 툴콜 JSON 파싱 정상 여부 |
+| 2 | 멀티스텝 에이전트 | `GitHub 레포 목록 가져와서 가장 최근 커밋 알려줘` | 도구 선택·순차 계획 능력 (Qwen35B 강점 확인용) |
+| 3 | 긴 컨텍스트 | 긴 문서 붙여넣고 `3번째 섹션 수치 다시 말해줘` | 131072 컨텍스트 실제 활용도 |
+| 4 | 비전 | 이미지 첨부 후 `이 이미지 설명해줘` | mmproj 정상 작동 (두 모델 공통) |
+| 5 | 코딩 | `피보나치 메모이제이션 구현 + 테스트 코드` | Qwen35B 강점 영역 확인 |
+| 6 | 메모리 | `내 이름은 윤이고 RTX 4070 SUPER를 써. 기억해줘` → 재시작 후 재질문 | `USER.md` 자동 생성 |
+| 7 | 브라우저 | `example.com 접속해서 제목 알려줘` | Playwright 정상 작동 |
+| 8 | 모델 전환 | `llm-switch.sh use qwen35b` 후 1~5번 재실행 | 전환 후에도 동일 품질 유지되는지 |
+
+### 12-4. Slack/Telegram 연동 테스트
+```bash
+hermes gateway start
+```
+응답이 없으면 `hermes gateway logs`를 확인하세요.
+
+### 12-5. 재부팅 후 자동 복구 검증
+1. Windows 재부팅
+2. 5분 뒤 Orca에서 Tailscale IP 재접속
+3. `systemctl status gemma4-llama` `active (running)` 확인
+4. `hermes doctor`로 provider/컨텍스트 131072 유지 확인
+
+---
+
+## 13. 남은 리스크 체크리스트 (v15 갱신)
+
+1. **선제 점검 순서 준수**: GPU 확인 → 메모리 할당 → dpkg → Node 툴체인 → 5장 순서.
+2. CUDA 빌드는 `-j` 무제한 병렬 시 OOM으로 컴파일러/WSL2 자체가 죽을 수 있음 — `-j2`부터 시작, 필요시 스왑 추가.
+3. WSL2 `E_UNEXPECTED` 크래시는 대개 RAM 소진 — `wsl --shutdown` → `wsl --update` → 재부팅 순으로 복구.
+4. YAML config에서 콜론 포함 키는 반드시 따옴표로 감싸기.
+5. Qwen 계열 추론 모델은 `-n` 토큰 한도가 작으면 사고 과정만 하다 끝남 — 넉넉한 `-n` 또는 `/no_think` 사용.
+6. `n_parallel`을 `auto`로 두면 슬롯 수만큼 KV 캐시가 배로 소비됨 — 1인 사용 환경에선 `-np 1`로 고정.
+7. Hermes Agent는 config.yaml `context_length` < 64,000이면 provider 자체를 초기화 거부 — 서버 실제 컨텍스트와 config 값을 반드시 64K 이상으로 일치시킬 것.
+8. **[v15]** Gemma4-12B(8.5~9GB)와 Qwen3.6-35B-A3B(12GB 근접)는 동시 상주 불가 — 7장의 `llm-switch.sh`로 순차 운용.
+9. **[v15]** Qwen3.6-35B-A3B의 `--n-cpu-moe` 값은 컨텍스트 길이·카드에 따라 재조정 필요 — 시작값 26에서 OOM 여부 보며 5씩 조정.
+10. **[v15]** `--mmproj`와 `--spec-type draft-mtp` 동시 사용은 최신 llama.cpp 빌드(b9620+)에서만 보고된 사례이며, 검증 사례가 많지 않으니 로그의 `n_drafted`/`n_accepted`로 반드시 재확인.
+11. **[v15]** 두 모델 다 `port: 8000`으로 통일했으므로, 전환 후 `curl .../v1/models`로 실제 로드된 모델을 재확인하는 습관 필수 — 포트만으로는 구분 불가.
+12. Slack/Telegram 게이트웨이를 상시 운용할 경우 7~8장의 모델 전환과 충돌 가능 — 10-6 참고.
+13. Telegram/GitHub 등 토큰은 대화 로그에 노출되는 즉시 폐기·재발급을 기본 원칙으로.
+14. Node 버전 24 고정, 임의 업그레이드 금지.
+15. Tailscale auth key 만료 시 재발급 필요.

@@ -1,6 +1,8 @@
 # Hermes Snapshot (헤르메스 스냅샷)
 
-이 문서는 현재 운영 중인 **Hermes Agent 시스템의 정체성, 핵심 운영 원칙 및 기술적 환경**을 정의하는 공식 매뉴얼입니다. 모든 작업 수행 시 이 가이드라인을 우선적으로 참조합니다.
+이 문서는 현재 운영 중인 **Hermes Agent 시스템의 정체성, 핵심 운영 원칙 및 기술적 환경**을 정의하는 매뉴얼입니다.
+
+**참고 방식**: 이 문서는 Hermes에게 자동으로 로드되지 않습니다. 지금은 필요할 때 사람이 직접 참조를 지시하며, 추후 이 스냅샷을 최신 상태로 갱신해주는 스킬을 만들 예정입니다(자세한 내용은 `README.md` 9~10번 섹션 참고).
 
 ## 1. Identity & Philosophy (시스템 정체성)
 
@@ -35,7 +37,7 @@
 ### Infrastructure
 *   **OS:** Windows Subsystem for Linux (WSL)
 *   **CPU/RAM:** AMD Ryzen 9 7900 / 23GiB RAM
-*   **GPU:** NVIDIA RTX 4070 (CUDA 12.6 활성화 완료)
+*   **GPU:** NVIDIA RTX 4070 SUPER (CUDA 12.6 활성화 완료)
 
 ### Development Stack
 *   **Language:** Python 3.11
