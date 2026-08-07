@@ -1,11 +1,190 @@
-# hybrid-orch-engine (폐기됨)
+# Hermes Agent 자동화 사용법 (이 환경 기준)
 
-Hermes Agent에 상태 기반 오케스트레이션 + 작업 완료 알림 + 목표 추적을 붙이려던 프로젝트.
-**Hermes v0.20.0 기준으로 전부 내장 기능에 포함되어 있어 코드를 전량 삭제했습니다.**
+이 레포는 원래 Hermes Agent에 붙일 자체 오케스트레이션 엔진이었습니다. 실제로 테스트해보니
+필요한 기능(작업 완료 알림, 목표 추적, 예약 실행)이 Hermes 내장 기능만으로 자연어 그대로
+작동한다는 게 확인돼서 엔진 코드는 전량 삭제했습니다 (`git show 647b8fc`에 원본 남아있음).
 
-원본 코드는 git 히스토리에 남아 있습니다 (`git show 647b8fc`).
+지금부터는 **"이 환경에서 무슨 말을 하면 무슨 일이 일어나는지"를 실측한 사용설명서**입니다.
+전부 아래 환경에서 직접 텔레그램으로 테스트하고 로그로 검증한 내용입니다.
 
-## 무엇이 무엇으로 대체되었나
+**환경**: WSL2 / Hermes Agent v0.20.0 / gemma-4-12b-it-qat-q4_0 (llama-server, `--parallel 1`,
+`-c 131072`) / RTX 4070 12GB / 텔레그램 게이트웨이.
+
+---
+
+## 1. 실행 중인 작업이 끝나면 알림 받기
+
+도구 이름이나 파라미터를 몰라도 됩니다. 그냥 시키면 Hermes가 알아서
+`background=True` + `notify_on_complete=True`를 선택합니다 (실측 확인됨).
+
+> 터미널에서 `<명령어>` 좀 돌려줘. 끝나면 알려주고, 안 기다려도 돼.
+
+- 응답이 즉시 옵니다(작업을 기다리지 않음).
+- 작업이 끝나면 성공이든 실패든 **새 메시지로 자동 통보**됩니다. 실패 시 종료 코드까지 알려줍니다.
+- 리서치/분석처럼 LLM이 필요한 작업은 `delegate_task`로 위임해도 같은 방식입니다.
+
+**주의**: 셸 명령(`sleep`, 빌드, 스크립트 등)은 OS 프로세스라 여러 개를 동시에 시켜도 진짜
+병렬로 돕니다. 반면 **리서치·분석처럼 모델 추론이 필요한 백그라운드 작업 여러 개를 동시에
+맡기면 `--parallel 1` 때문에 사실상 한 슬롯을 두고 줄을 섭니다.** "동시에 끝난다"가 아니라
+"총 소요시간이 대략 합산된다"고 예상할 것. 결과가 섞이는 일은 없습니다(귀속은 정확).
+
+**Hermes가 띄우지 않은 외부 프로세스는 추적 대상이 아닙니다.** WSL에서 직접 `nohup`으로
+뭔가 돌리셨다면 그건 Hermes가 알 방법이 없습니다. 그럴 땐 명령 끝에 직접 붙이세요:
+```bash
+<작업>; curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+  -d chat_id="${TELEGRAM_HOME_CHANNEL}" -d text="done: $?"
+```
+
+---
+
+## 2. 예약 실행 / 반복 작업 (cron)
+
+이것도 "cron"이라는 단어조차 필요 없습니다.
+
+> 5분 뒤에 딱 한 번만 "○○" 라고 알려줘.
+> 매일 아침 9시에 서버 상태 확인해서 알려줘.
+> 2시간마다 뉴스 확인해서 요약해줘.
+
+Hermes가 자체 `cronjob` 도구로 알아서 job을 만들고, 만든 대화방(`origin`)으로 정확히
+배달합니다(실측 확인됨 — 목적지가 꼬이지 않았습니다).
+
+**직접 관리하고 싶으면 CLI도 있습니다:**
+```bash
+hermes cron create "every 2h" "<지시>" --deliver telegram:<chat_id>
+hermes cron create "30m" "<지시>"                              # 일회성
+hermes cron create "every 5m" --no-agent --script <경로> --deliver telegram   # LLM 없이 스크립트만
+hermes cron list
+hermes cron remove <name-or-id>
+```
+`--script`는 `~/.hermes/scripts/` 아래 경로만 받습니다. 대화창에서 그냥
+"방금 만든 알림 취소해줘"라고 해도 됩니다.
+
+**주의**:
+- 스케줄이 정각에 딱 맞지는 않습니다. "1분 뒤"가 실제로는 몇 초~몇십 초 늦게 옵니다.
+  스케줄러 틱 간격 때문이라 정상 범위입니다.
+- cron이 실행하는 턴도 결국 같은 `--parallel 1` 슬롯을 씁니다. 다른 대화/작업이 몰려 있으면
+  cron도 그 뒤에서 기다립니다.
+- 드물게 특정 프롬프트가 모델의 생성 폭주(끝없이 토큰을 뱉는 상태)를 유발할 수 있습니다.
+  이 경우 최대 수 분~10분 정도 슬롯이 묶이지만, **자체 provider timeout이 있어서 결국은
+  실패로 보고됩니다** (조용히 씹히지 않음, 실측 확인됨). 자세한 원인은 8번 참고.
+
+---
+
+## 3. 장기 목표 추적 (`/goal`)
+
+세션이 끊기거나 게이트웨이가 재시작돼도 살아남습니다(실측: 재시작 2회 후에도 진행 상태·조건
+그대로 복원). 매 턴마다 보조 judge가 완료 여부를 판정합니다.
+
+```
+/goal <목표>              # 설정 + 즉시 첫 턴 시작
+/goal draft <목표>        # 완료 조건을 Hermes가 구조화해서 작성
+/goal show                # 현재 상태·진행 턴 수 확인
+/goal pause / resume      # 일시정지 / 재개
+/goal clear                # 목표 제거
+```
+
+**Acceptance(완료 조건)는 반드시 최종 상태로 검증 가능한 문장으로 쓸 것:**
+```
+/goal <목표>
+Acceptance: <완료 여부를 결과물만 보고 판단할 수 있는 조건>
+```
+judge는 **Acceptance 줄만** 판정 기준으로 삼습니다. "각 턴마다 하나씩" 같은 과정에 대한
+지시는 강제되지 않고, 모델이 한 번에 몰아서 처리해도 Acceptance만 충족되면 완료 처리됩니다
+(실측 확인됨).
+
+**함정 — `/goal resume`은 스스로 다음 턴을 진행하지 않습니다.** pause 상태에서 resume만
+보내면 "다음 메시지를 보내거나 기다리라"는 응답만 오고 실제 진행은 없습니다(실측 확인됨).
+장기 목표를 진짜 무인으로 돌리려면 pause 후 넛지 메시지가 주기적으로 필요합니다:
+```
+hermes cron create "10m" "진행 중인 목표 있으면 계속 진행해"
+```
+
+카드 단위로 격리해서 돌리고 싶으면 kanban의 goal 모드도 같은 엔진을 씁니다:
+```bash
+hermes kanban create "<제목>" --body "Acceptance: <완료 조건>" --goal --goal-max-turns 15
+```
+
+---
+
+## 4. 텔레그램에서 먼저 말 걸게 하기 (선제 발송)
+
+cron·목표 완료 결과가 어디로 갈지는 "home channel"이 결정합니다.
+
+- 텔레그램 채팅방에서 `/sethome` 한 번이면 그 방이 기본 목적지가 됩니다.
+- 수동 설정: `~/.hermes/.env`의 `TELEGRAM_HOME_CHANNEL=<chat_id>` (그룹은 음수 ID, 개인 DM은
+  본인 user ID와 동일).
+
+---
+
+## 5. 게이트웨이 재시작이 필요할 때
+
+```bash
+hermes gateway restart
+```
+in-flight 턴을 기다렸다가 우아하게 재기동합니다. **단, 진행 중인 턴이 있으면 그게 끝날 때까지
+기다립니다** — 폭주 중인 생성이 있으면 그 턴이 끝나야 재시작도 끝나므로 수 분~10분 이상
+걸릴 수 있습니다(실측 확인됨). 그럴 땐 Ctrl+C로 restart 명령만 취소하고 기다리면, 대개
+provider timeout이 알아서 정리합니다(2번 참고). 그래도 안 풀리면 `llama-server` 프로세스를
+직접 강제 종료해야 슬롯이 즉시 회수됩니다:
+```bash
+pgrep -af llama-server
+kill -9 <PID>
+# 평소 기동 스크립트로 재기동
+```
+
+---
+
+## 6. 확인된 이슈 — `/new` 후 텔레그램 "입력 중" 표시가 안 사라짐
+
+`/new`(세션 리셋, LLM 호출 불필요한 로컬 명령) 응답 직후 타이핑 인디케이터가 무기한
+지속됩니다. `is_processing=false`, 게이트웨이 프로세스 정상 단일, 로그 4분+ 무활동 상태에서도
+재현됨 — `sendChatAction`을 반복 발사하는 태스크가 취소 안 되는 것으로 추정. **일반 대화 턴
+종료 후에는 재현 안 됨** (session_reset 경로 한정으로 보임). 기능엔 영향 없음(알림·자동화
+전부 정상 동작). `hermes gateway restart`로 즉시 해소되나 다음 `/new` 때 재발 가능.
+
+이슈 등록 후보:
+```
+저장소: NousResearch/hermes-agent, 버전: v0.20.0 (2026.8.3)
+재현: 텔레그램에서 /new 전송 → 응답 즉시 수신 → 입력 중 표시 무기한 지속
+확인: /slots is_processing=false, 게이트웨이 단일 프로세스, 로그 4분+ 무활동
+```
+
+---
+
+## 7. 확인된 이슈 — 특정 프롬프트가 생성 폭주를 유발
+
+짧은 응답이면 충분한 프롬프트(예: cron의 "1분 뒤 한 번만 알려줘")에 대해 모델이 멈추지 않고
+계속 토큰을 생성하는 현상을 1회 재현. `/slots`에서 `n_decoded`가 18,927까지 올라간 채
+`has_next_token: true`로 계속 진행 중이었음. 원인 후보(둘 다 llama-server 실행 설정):
+
+```json
+"repeat_penalty": 1.0,       // 사실상 반복 억제 없음
+"reasoning_format": "deepseek"  // gemma 모델인데 DeepSeek 추론 포맷 파서 적용
+```
+
+`reasoning_format`이 모델과 안 맞으면 모델이 답을 다 냈는데 파서가 "아직 추론 중"으로 오인해
+계속 다음 토큰을 요구할 가능성이 있음. **약 10분 후 provider timeout으로 자동 실패 처리되고
+실패 알림도 정상 도착함** — 무한은 아니지만, `--parallel 1`이라 그 10분간 다른 모든 작업이
+막힘. 재발 방지하려면 llama-server 기동 스크립트에서 `--repeat-penalty`를 1.05~1.1 정도로,
+`--reasoning-format`을 모델에 맞는 값으로 조정 검토 (원래 이렇게 설정한 의도가 있었다면 그걸
+먼저 확인할 것 — 다음 섹션에서 논의 예정).
+
+---
+
+## 8. 하드웨어 노트
+
+- `llama-server --parallel 1` — 동시 추론 슬롯 1개. 셸 백그라운드 작업은 영향 없지만, LLM이
+  필요한 모든 작업(delegate_task, cron 턴, goal 턴)은 이 슬롯을 공유해서 사실상 직렬화됨.
+  진짜 동시 처리가 필요하면 `--parallel` 상향 + `-c` 재분배 필요하나, 12GB VRAM + 128K
+  컨텍스트 조합에선 여유가 크지 않아 트레이드오프 있음.
+- 로컬 12B는 tool calling·judge 판정 정확도가 프론티어 모델보다 낮음. `/goal`이나
+  `delegate_task`가 이상하게 굴면 모델 능력 문제일 수 있으니 `hermes model`로 해당 역할만
+  원격 API로 돌려서 원인을 분리할 것.
+- `repeat_penalty` / `reasoning_format` 설정: 7번 참고, 다음 논의 대상.
+
+---
+
+## 부록 — 무엇이 무엇으로 대체됐는가 (삭제된 엔진 기준)
 
 | 삭제된 것 | 대체 |
 |---|---|
@@ -18,44 +197,15 @@ Hermes Agent에 상태 기반 오케스트레이션 + 작업 완료 알림 + 목
 | `state/scenarios/audit_v1.json` | `/goal` 또는 kanban 카드 |
 | `docs/orchestration_protocol.md` (상태 전이 규칙) | `/goal` judge 루프 |
 
-## 대체 사용법
+**애초에 "알림이 안 온다"고 느꼈던 근본 원인**은 Hermes가 아니라 `core_engine.py`의 버그였음.
+`run_orchestration()`이 `self.state`를 메모리에 한 번만 로드하고 이후 갱신하지 않아 종료
+조건이 never true가 되는 무한루프였고, `notify_on_complete=true`는 프로세스 **종료 시점**에
+발화하는데 그 프로세스가 종료된 적이 없어서 알림도 없었음 (커밋 `5102326` 참고).
 
-**목표 추적** — 세션이 끊겨도 유지됨. judge가 매 턴 완료 여부 판정, 기본 20턴 예산.
+## 부록 — 이벤트 훅 (필요시)
 
-```
-/goal <목표>            # 설정 + 즉시 첫 턴 시작
-/goal draft <목표>      # 완료 조건을 구조화해서 작성
-/goal show | pause | resume | clear
-```
-
-본문에 **명시적 완료 조건**을 쓸수록 judge 판정이 정확해집니다.
-
-**카드 단위 목표 루프**
-
-```bash
-hermes kanban create "<제목>" \
-  --body "Acceptance: <완료 조건>" \
-  --goal --goal-max-turns 15
-```
-
-**예약 실행 + 배달**
-
-```bash
-hermes cron create "every 2h" "<지시>" --deliver telegram
-hermes cron create "30m" "<지시>"                    # 일회성
-hermes cron create "every 5m" --no-agent --script <경로> --deliver telegram
-hermes cron list / remove <name>
-```
-
-**텔레그램 선제 발송** — 텔레그램 채팅에서 `/sethome`. 또는 `TELEGRAM_HOME_CHANNEL=<chat_id>`.
-
-**백그라운드 작업 완료 통보**
-
-- `delegate_task(background=True)` — 핸들 즉시 반환, 완료 시 결과를 새 메시지로 자동 전달
-- `terminal(background=True, notify_on_complete=True)` — 세션 종료/재시작에도 살아남음
-
-**이벤트 훅** — `~/.hermes/config.yaml`
-
+지금까지 테스트한 범위에선 내장 알림만으로 충분해서 안 씀. 더 세밀한 제어가 필요해지면
+`~/.hermes/config.yaml`:
 ```yaml
 hooks:
   outbound:
@@ -64,81 +214,5 @@ hooks:
       events: [subagent_stop, on_session_end]
       timeout: 10
 ```
-
-이벤트: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`,
+이벤트 종류: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`,
 `on_session_start`, `on_session_end`, `subagent_start`, `subagent_stop`
-
-## 검증 결과 (2026-08-07)
-
-삭제가 안전한지 실제로 테스트함. 기능적으로 전부 통과 — 자체 엔진 불필요 확정.
-발견된 것들은 버그 하나(게이트웨이)와 운영상 주의사항 몇 개.
-
-| 테스트 | 내용 | 결과 |
-|---|---|---|
-| A1 | `terminal(background=True, notify_on_complete=True)` 정상 종료 | ✅ 자동 통보 도착 |
-| A2 | 같은 방식 비정상 종료(`exit 1`) | ✅ 종료 코드 포함해서 통보 (성공만 알리는 게 아님) |
-| B | `/goal`로 3단계 작업 + 명시적 Acceptance 조건 | ✅ 조건 충족 확인 후 자동 완료·클리어 |
-| 동시성-셸 | `terminal` 백그라운드 2개 동시 실행 | ✅ 진짜 병렬, 알림 귀속 정확 |
-| 동시성-LLM | `delegate_task` 백그라운드 2개(웹서치 포함) 동시 실행 | ⚠️ 겹쳐 시작하나 GPU 슬롯 경합으로 큐잉 (아래 참고) |
-| 목표 영속성 | `/goal pause` → 게이트웨이 재시작(2회) → `/goal show` | ✅ 턴 수·조건 그대로 복원 |
-| 목표 재개 | `/goal resume` 단독 | ⚠️ 상태만 해제, 진행은 안 됨 (아래 참고) |
-| cron | `hermes cron create "1m" ...` | ✅ 도착 (정각은 아니고 약간 지연) |
-
-**근본 원인**: 원래 "알림이 안 온다"고 느꼈던 원인은 Hermes가 아니라 `core_engine.py`의 버그였음.
-`run_orchestration()`이 `self.state`를 메모리에 한 번만 로드하고 이후 갱신하지 않아 종료 조건이
-never true가 되는 무한루프. `notify_on_complete=true`가 프로세스 **종료 시점**에 발화하는데
-프로세스가 종료된 적이 없어서 알림도 없었음 (커밋 `5102326` 참고).
-
-**B 테스트로 밝혀진 부수 사항**: judge는 지시문 전체가 아니라 **Acceptance 줄만** 판정 기준으로
-삼음. "각각 다른 턴에" 같은 부가 지시는 강제되지 않았음 — Acceptance는 반드시 최종 상태 검증
-가능한 조건으로만 쓸 것.
-
-**동시성 실측**: 순수 셸 백그라운드(`terminal`)는 OS 프로세스라 진짜 병렬. 반면 `delegate_task`
-2개를 거의 동시에 넣었더니 동일 토큰 수(`in=16600`) 요청인데 하나는 latency 11.9s, 하나는
-21.1s — 뒤엣것이 GPU 슬롯을 기다린 대기시간이 그대로 latency에 얹힘. 완료 통보도 20초 차이로
-벌어져 도착. `llama-server --parallel 1`(동시 추론 슬롯 1개) 때문. 알림 귀속은 경합 중에도
-정확했음(두 작업 결과가 안 섞임). **여러 리서치/분석 서브에이전트를 동시에 맡기면 "동시에
-끝난다"가 아니라 "총 소요시간이 대략 합산된다"고 가정할 것.**
-
-**`/goal resume`의 함정**: pause 상태에서 `resume`만 보내면 "Send any message to continue, or
-wait — I'll take the next step on the next turn"라며 상태만 unpause되고 실제로는 진행 안 됨.
-아무 메시지("계속해줘" 등)를 한 번 더 보내야 다음 턴이 실행됨. **장기 목표를 진짜 무인으로
-돌리려면 pause 후 cron으로 주기적 넛지를 걸어둬야 함** (예:
-`hermes cron create "10m" "진행 중인 목표 있으면 계속 진행해"`).
-
-**게이트웨이 버그 (재현됨, 사소함)**: `/new`(session_reset) 응답 직후 텔레그램 타이핑
-인디케이터가 무기한 지속. `is_processing=false`, 게이트웨이 단일 프로세스, 4분+ 로그 무활동
-확인된 상태에서도 발생 — `sendChatAction` 반복 태스크가 취소 안 되는 것으로 추정. 일반 대화
-턴 종료 후에는 재현 안 됨(session_reset 경로 한정으로 보임). `mem_trim` 로그의 `threads=14`가
-안 늘어나는 걸로 봐서 스레드 누수는 아님. `hermes gateway restart`로 즉시 해소되나 다음 `/new`
-때 재발 가능. 기능엔 영향 없음(A1/A2/B/cron 전부 정상). NousResearch/hermes-agent에 이슈
-등록 후보:
-```
-버전: v0.20.0 (2026.8.3)
-재현: 텔레그램에서 /new 전송 → 응답 즉시 수신 → 입력 중 표시 무기한 지속
-확인: /slots is_processing=false, 게이트웨이 단일 프로세스, 로그 4분+ 무활동
-```
-
-**하드웨어 관련 발견**: `llama-server --parallel 1` — 동시 요청 1개로 고정되어 있어 여러
-서브에이전트/cron을 동시에 돌려도 물리적으로 직렬화됨. 병렬 처리가 필요하면 `--parallel` 상향 +
-`-c` 재분배가 필요하나 12GB VRAM + 128K 컨텍스트 조합에선 여유가 크지 않음.
-
-**참고**: 게이트웨이 재시작은 `hermes gateway restart` — in-flight 턴을 드레인하고 우아하게
-재기동함. `kill` 후 수동 재실행보다 이걸 쓸 것.
-
-## 남는 갭
-
-Hermes가 띄우지 않은 외부 프로세스는 추적 불가. 엔진이 아니라 한 줄로 해결:
-
-```bash
-<작업>; curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-  -d chat_id="${TELEGRAM_HOME_CHANNEL}" -d text="done: $?"
-```
-
-## 환경
-
-WSL2 / Hermes Agent v0.20.0 / gemma-4-12b-it-qat-q4_0 (llama-server, `--parallel 1`) / RTX 4070 12GB.
-
-로컬 12B는 tool calling과 judge 판정 정확도가 프론티어 모델보다 낮습니다.
-`/goal`이나 `delegate_task`가 불안정하면 엔진 문제가 아니라 모델 능력 문제일 수 있으므로,
-`hermes model`로 해당 역할만 원격 API로 돌려서 원인을 분리할 것.
