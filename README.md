@@ -68,6 +68,29 @@ hooks:
 이벤트: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`,
 `on_session_start`, `on_session_end`, `subagent_start`, `subagent_stop`
 
+## 검증 결과 (2026-08-07)
+
+삭제가 안전한지 실제로 테스트함. 전부 통과 — 자체 엔진 불필요 확정.
+
+| 테스트 | 내용 | 결과 |
+|---|---|---|
+| A1 | `terminal(background=True, notify_on_complete=True)` 정상 종료 | ✅ 자동 통보 도착 |
+| A2 | 같은 방식 비정상 종료(`exit 1`) | ✅ 종료 코드 포함해서 통보 (성공만 알리는 게 아님) |
+| B | `/goal`로 3단계 작업 + 명시적 Acceptance 조건 | ✅ 조건 충족 확인 후 자동 완료·클리어 |
+
+**근본 원인**: 원래 "알림이 안 온다"고 느꼈던 원인은 Hermes가 아니라 `core_engine.py`의 버그였음.
+`run_orchestration()`이 `self.state`를 메모리에 한 번만 로드하고 이후 갱신하지 않아 종료 조건이
+never true가 되는 무한루프. `notify_on_complete=true`가 프로세스 **종료 시점**에 발화하는데
+프로세스가 종료된 적이 없어서 알림도 없었음 (커밋 `5102326` 참고).
+
+**B 테스트로 밝혀진 부수 사항**: judge는 지시문 전체가 아니라 **Acceptance 줄만** 판정 기준으로
+삼음. "각각 다른 턴에" 같은 부가 지시는 강제되지 않았음 — Acceptance는 반드시 최종 상태 검증
+가능한 조건으로만 쓸 것.
+
+**하드웨어 관련 발견**: `llama-server --parallel 1` — 동시 요청 1개로 고정되어 있어 여러
+서브에이전트/cron을 동시에 돌려도 물리적으로 직렬화됨. 병렬 처리가 필요하면 `--parallel` 상향 +
+`-c` 재분배가 필요하나 12GB VRAM + 128K 컨텍스트 조합에선 여유가 크지 않음.
+
 ## 남는 갭
 
 Hermes가 띄우지 않은 외부 프로세스는 추적 불가. 엔진이 아니라 한 줄로 해결:
@@ -79,8 +102,8 @@ Hermes가 띄우지 않은 외부 프로세스는 추적 불가. 엔진이 아�
 
 ## 환경
 
-WSL2 / Hermes Agent v0.20.0 / Gemma 14B (Ollama) / RTX 4070 12GB.
+WSL2 / Hermes Agent v0.20.0 / gemma-4-12b-it-qat-q4_0 (llama-server, `--parallel 1`) / RTX 4070 12GB.
 
-로컬 14B는 tool calling과 judge 판정 정확도가 프론티어 모델보다 낮습니다.
+로컬 12B는 tool calling과 judge 판정 정확도가 프론티어 모델보다 낮습니다.
 `/goal`이나 `delegate_task`가 불안정하면 엔진 문제가 아니라 모델 능력 문제일 수 있으므로,
 `hermes model`로 해당 역할만 원격 API로 돌려서 원인을 분리할 것.
