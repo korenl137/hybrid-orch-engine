@@ -39,25 +39,36 @@
 
 ## 2. 예약 실행 / 반복 작업 (cron)
 
-이것도 "cron"이라는 단어조차 필요 없습니다.
+"cron"이라는 단어조차 필요 없이 말로 시켜도 job 생성과 배달 목적지 지정까지는 정확히
+동작합니다(실측 확인됨).
 
 > 5분 뒤에 딱 한 번만 "○○" 라고 알려줘.
 > 매일 아침 9시에 서버 상태 확인해서 알려줘.
 > 2시간마다 뉴스 확인해서 요약해줘.
 
-Hermes가 자체 `cronjob` 도구로 알아서 job을 만들고, 만든 대화방(`origin`)으로 정확히
-배달합니다(실측 확인됨 — 목적지가 꼬이지 않았습니다).
+**다만 판단 없이 그냥 알려주기만 하면 되는 단순 리마인더는 자연어 대신 `--no-agent`로
+만드는 걸 권장합니다.** 이유는 아래 "확인된 이슈" 참고 — 이 환경에서 12B 모델이 짧은
+리마인더 프롬프트를 반복적으로 `[SILENT]`(알릴 필요 없음)로 오판해서 배달이 조용히
+스킵되는 게 실측으로 확인됐습니다. "뉴스 확인해서 요약해줘"처럼 진짜 판단·생성이 필요한
+job은 에이전트 모드가 맞고, "몇 분 뒤 한 번 알려줘"류는 스크립트로 우회하는 게 안전합니다:
 
-**직접 관리하고 싶으면 CLI도 있습니다:**
+```bash
+printf '#!/bin/bash\necho "<메시지>"\n' > ~/.hermes/scripts/<이름>.sh
+chmod +x ~/.hermes/scripts/<이름>.sh
+hermes cron create "<시간>" --no-agent --script <이름>.sh --deliver telegram:<chat_id> --name <이름>
+```
+
+**CLI로 직접 관리:**
 ```bash
 hermes cron create "every 2h" "<지시>" --deliver telegram:<chat_id>
-hermes cron create "30m" "<지시>"                              # 일회성
+hermes cron create "30m" "<지시>"                              # 일회성, 에이전트 모드
 hermes cron create "every 5m" --no-agent --script <경로> --deliver telegram   # LLM 없이 스크립트만
 hermes cron list
 hermes cron remove <name-or-id>
 ```
 `--script`는 `~/.hermes/scripts/` 아래 경로만 받습니다. 대화창에서 그냥
-"방금 만든 알림 취소해줘"라고 해도 됩니다.
+"방금 만든 알림 취소해줘"라고 해도 됩니다. 일회성(`Repeat: 1/1`) job은 실행 후
+`cron list`에서 자동으로 사라지는 게 정상입니다 — 목록에 없다고 실패한 건 아닙니다.
 
 **주의**:
 - 스케줄이 정각에 딱 맞지는 않습니다. "1분 뒤"가 실제로는 몇 초~몇십 초 늦게 옵니다.
@@ -66,7 +77,10 @@ hermes cron remove <name-or-id>
   cron도 그 뒤에서 기다립니다.
 - 드물게 특정 프롬프트가 모델의 생성 폭주(끝없이 토큰을 뱉는 상태)를 유발할 수 있습니다.
   이 경우 최대 수 분~10분 정도 슬롯이 묶이지만, **자체 provider timeout이 있어서 결국은
-  실패로 보고됩니다** (조용히 씹히지 않음, 실측 확인됨). 자세한 원인은 8번 참고.
+  실패로 보고됩니다** (조용히 씹히지 않음, 실측 확인됨). 자세한 원인·해결은 7번 참고.
+- 에이전트 모드 job이 `agent returned [SILENT] — skipping delivery`로 조용히 스킵될 수
+  있습니다. "절대 침묵하지 마" 같은 명시적 지시로도 회피 안 됨(실측 3회 재현). 자세한 내용은
+  8번 참고, 위 `--no-agent` 대안 사용할 것.
 
 ---
 
@@ -151,27 +165,57 @@ kill -9 <PID>
 
 ---
 
-## 7. 확인된 이슈 — 특정 프롬프트가 생성 폭주를 유발
+## 7. 확인·해결된 이슈 — 생성 폭주 (repeat-penalty 미설정)
 
 짧은 응답이면 충분한 프롬프트(예: cron의 "1분 뒤 한 번만 알려줘")에 대해 모델이 멈추지 않고
-계속 토큰을 생성하는 현상을 1회 재현. `/slots`에서 `n_decoded`가 18,927까지 올라간 채
-`has_next_token: true`로 계속 진행 중이었음. 원인 후보(둘 다 llama-server 실행 설정):
+계속 토큰을 생성하는 현상을 재현. `/slots`에서 `n_decoded`가 18,927까지 올라간 채
+`has_next_token: true`로 계속 진행 중이었음. 약 10분 후 provider timeout으로 자동 실패
+처리되고 실패 알림도 정상 도착했음(조용히 씹히지 않음) — 하지만 `--parallel 1`이라 그
+10분간 다른 모든 작업이 막힘.
 
-```json
-"repeat_penalty": 1.0,       // 사실상 반복 억제 없음
-"reasoning_format": "deepseek"  // gemma 모델인데 DeepSeek 추론 포맷 파서 적용
+**원인 조사**: `--reasoning-format`(gemma에 DeepSeek 파서가 잘못 적용됐다는 초기 가설)은
+기각. `llama-server --help` 확인 결과 기본값이 `auto`이고, 템플릿이 reasoning을 지원한다고
+선언하면 `deepseek` 포맷을 자동 선택하는 게 정상 동작 — 실제로 명시적으로 설정된 값이
+아니었음. `--repeat-penalty`도 마찬가지로 기본값 `1.00`(=비활성)이었을 뿐 이례적인 설정은
+아니었음. 즉 **"잘못 설정됐다"가 아니라 "아무것도 설정 안 된 기본 상태에서, 반복 억제
+장치가 없다 보니 특정 프롬프트가 우연히 모델을 못 빠져나오는 반복 루프로 몰아넣었다"**는
+쪽으로 결론.
+
+**적용한 수정** (`~/llm-stack/registry.yaml`, `models.gemma4.extra_flags`):
 ```
+--jinja --flash-attn on -ngl 99 --parallel 1 --repeat-penalty 1.1
+```
+`~/llm-stack/bin/llm-switch.sh use gemma4`로 적용 (이 스크립트가 `registry.yaml`을 읽어
+`registry/gemma4.env`를 재생성하고 systemd 서비스를 재시작함 — `gemma4.env`를 직접 고치면
+다음 전환 때 덮어써지므로 반드시 `registry.yaml`을 고칠 것).
 
-`reasoning_format`이 모델과 안 맞으면 모델이 답을 다 냈는데 파서가 "아직 추론 중"으로 오인해
-계속 다음 토큰을 요구할 가능성이 있음. **약 10분 후 provider timeout으로 자동 실패 처리되고
-실패 알림도 정상 도착함** — 무한은 아니지만, `--parallel 1`이라 그 10분간 다른 모든 작업이
-막힘. 재발 방지하려면 llama-server 기동 스크립트에서 `--repeat-penalty`를 1.05~1.1 정도로,
-`--reasoning-format`을 모델에 맞는 값으로 조정 검토 (원래 이렇게 설정한 의도가 있었다면 그걸
-먼저 확인할 것 — 다음 섹션에서 논의 예정).
+**검증**: 동일 조건(같은 "1분 뒤 알려줘" 프롬프트)으로 재현 시도 → `n_decoded=696`에서
+`is_processing: false`로 정상 종료, 폭주 재현 안 됨. **해결 확인됨.**
 
 ---
 
-## 8. 하드웨어 노트
+## 8. 확인된 이슈 — 짧은 리마인더가 `[SILENT]`로 조용히 스킵됨
+
+cron job의 시스템 프롬프트에는 "알릴 필요 없으면 `[SILENT]`를 반환해서 배달을 건너뛰라"는
+지침이 있는 것으로 보임(왓치독 job에서 "이상 없으면 조용히"용 기능으로 추정). "1분 뒤 딱
+한 번만 '테스트 완료'라고 알려줘" 같은 단순 일회성 리마인더에서 12B 모델이 이 지침을
+과도하게 일반화해서 매번 `[SILENT]`를 반환 — **정상적으로 응답을 생성하고 턴도 정상
+종료(`finish_reason=stop`)하지만 배달만 스킵됨.** `hermes cron list`엔 job이 실행 완료 후
+정상적으로 사라지므로 겉으로는 아무 이상이 없어 보임.
+
+로그 확인 방법:
+```bash
+grep "agent returned \[SILENT\]" ~/.hermes/logs/agent.log
+```
+
+**프롬프트에 "절대 침묵하지 마", "[SILENT]를 반환하지 마"를 명시해도 회피 안 됨 (3회
+재현, 매번 동일하게 스킵).** 지시로 고칠 수 있는 문제가 아니므로, 대응은 2번 섹션의
+`--no-agent` 우회가 유일하게 확인된 해법. `--no-agent` job은 LLM 판단 자체를 거치지 않아
+이 오판이 구조적으로 불가능함 — 실측으로 정상 배달 확인.
+
+---
+
+## 9. 하드웨어 노트
 
 - `llama-server --parallel 1` — 동시 추론 슬롯 1개. 셸 백그라운드 작업은 영향 없지만, LLM이
   필요한 모든 작업(delegate_task, cron 턴, goal 턴)은 이 슬롯을 공유해서 사실상 직렬화됨.
@@ -180,7 +224,9 @@ kill -9 <PID>
 - 로컬 12B는 tool calling·judge 판정 정확도가 프론티어 모델보다 낮음. `/goal`이나
   `delegate_task`가 이상하게 굴면 모델 능력 문제일 수 있으니 `hermes model`로 해당 역할만
   원격 API로 돌려서 원인을 분리할 것.
-- `repeat_penalty` / `reasoning_format` 설정: 7번 참고, 다음 논의 대상.
+- `repeat_penalty` 미설정으로 인한 생성 폭주: 7번 참고, `1.1`로 해결 확인됨.
+- `[SILENT]` 오판으로 인한 무음 스킵: 8번 참고, 모델 능력(작은 모델의 지시 우선순위 처리)
+  한계로 추정 — `--no-agent`로 우회.
 
 ---
 
