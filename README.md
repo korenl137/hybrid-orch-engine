@@ -132,18 +132,26 @@ cron·목표 완료 결과가 어디로 갈지는 "home channel"이 결정합니
 
 ## 5. 게이트웨이 재시작이 필요할 때
 
-```bash
-hermes gateway restart
-```
-in-flight 턴을 기다렸다가 우아하게 재기동합니다. **단, 진행 중인 턴이 있으면 그게 끝날 때까지
-기다립니다** — 폭주 중인 생성이 있으면 그 턴이 끝나야 재시작도 끝나므로 수 분~10분 이상
-걸릴 수 있습니다(실측 확인됨). 그럴 땐 Ctrl+C로 restart 명령만 취소하고 기다리면, 대개
-provider timeout이 알아서 정리합니다(2번 참고). 그래도 안 풀리면 `llama-server` 프로세스를
-직접 강제 종료해야 슬롯이 즉시 회수됩니다:
+**텔레그램에서 그냥 `/restart`.** 콘솔 없이 됩니다(실측 확인됨). WSL의
+`hermes gateway restart`와 동일 동작으로 보이며, in-flight 턴을 기다렸다가 우아하게
+재기동합니다.
+
+**단, `/restart`(및 `hermes gateway restart`)는 게이트웨이 프로세스만 재시작합니다.
+llama-server(모델 서버)는 건드리지 않습니다** — 재시작 전후로 llama-server PID가 동일함을
+실측 확인. 둘은 완전히 별개 supervisor(게이트웨이 자체 vs systemd `llm@gemma4` 서비스)로
+관리되는 구조이기 때문입니다.
+
+**진행 중인 턴이 있으면 그게 끝날 때까지 기다립니다** — 폭주 중인 생성이 있으면 그 턴이
+끝나야 재시작도 끝나므로 수 분~10분 이상 걸릴 수 있습니다(실측 확인됨, 단 7번 이슈 해결
+후로는 폭주 자체가 재현 안 되고 있음). 오래 걸리면 재시작 명령만 취소(Ctrl+C 또는 텔레그램
+메시지 무시)하고 기다리면, 대개 provider timeout이 알아서 정리합니다(2번 참고).
+
+**llama-server 자체가 문제일 때(응답 없음, 슬롯이 계속 물려있음)는 `/restart`로 안
+풀립니다** — 콘솔에서 직접 다뤄야 합니다:
 ```bash
 pgrep -af llama-server
 kill -9 <PID>
-# 평소 기동 스크립트로 재기동
+~/llm-stack/bin/llm-switch.sh use gemma4      # registry.yaml 기준으로 재기동
 ```
 
 ---
