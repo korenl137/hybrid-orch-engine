@@ -12,7 +12,7 @@
 `-c 131072`) / RTX 4070 SUPER 12GB / 텔레그램 게이트웨이. `--repeat-penalty`는 기본값 1.0으로
 운영 중 — 7.1 참고.
 
-**빠른 참조** — 하고 싶은 일 → 어디를 볼지:
+**빠른 참조** — 하고 싶은 일 -> 어디를 볼지:
 
 | 하고 싶은 일 | 섹션 |
 |---|---|
@@ -162,7 +162,7 @@ kill -9 <PID>
 
 | 위치 | 역할 |
 |---|---|
-| `~/.hermes/` | **Hermes 자신을 운영하는 데 필요한 것.** 설정(`config.yaml`, `.env`), 로그, 메모리, 세션, cron이 참조하는 스크립트(`scripts/`), 스킬(`skills/`), 훅(`hooks/`). |
+| `~/.hermes/` | **Hermes 자신을 운영하는 데 필요한 것.** 설정(`config.yaml`, `.env`), 로그, 메모리, 세션, 크론이 참조하는 스크립트(`scripts/`), 스킬(`skills/`), 훅(`hooks/`). |
 | `~/hermes-agent-playbook/` (이 레포) | **Hermes *자체*에 대한 기록.** 사용법, 발견한 버그, 설정 튜닝 히스토리 — 이 문서. |
 | `~/workspace/projects/<주제-slug>/` | **Hermes와 *함께* 만든 결과물.** 리서치, 분석, 코딩, 문서, 실험 기록 등. |
 | `~/workspace/shared/` | 여러 프로젝트가 공유하는 자원. |
@@ -176,104 +176,64 @@ kill -9 <PID>
 
 | # | 증상 | 상태 |
 |---|---|---|
-| 7.1 | 생성 폭주 (짧은 응답이면 되는데 수천 토큰씩 안 멈춤) | ⚠️ 원인 규명됨, 대응은 조건부 |
+| 7.1 | 생성 폭주 (짧은 응답이면 되는데 수천 토큰씩 안 멈춤) | ✅ 해결됨 |
 | 7.2 | 짧은 일회성 리마인더가 `[SILENT]`로 무음 스킵 | ⚠️ 우회됨 (2번 참고) |
-| 7.3 | `/new` 후 텔레그램 "입력 중" 표시가 안 사라짐 | 재현됨, 기능 영향 없음 |
+| 7.3 | `/new` 후 텔레그램 타이핑 표시가 안 사라짐 | 재현됨, 기능 영향 없음 |
 
-### 7.1 생성 폭주 — 원인 규명됨, 대응은 조건부 적용
+### 7.1 생성 폭주 — 해결됨
 
 cron의 "1분 뒤 한 번만 알려줘"처럼 짧은 응답이면 충분한 프롬프트에서 모델이 멈추지 않고
 계속 토큰을 생성. `/slots`에서 `n_decoded`가 18,927까지 올라간 채 진행 중이었음. 약 10분 후
 provider timeout으로 자동 실패 처리되고 실패 알림도 정상 도착(조용히 씹히지 않음) — 하지만
-`--parallel 1`이라 그 10분간 다른 모든 작업이 막힘.
+`--parallel 1`이라 그 10분간 다른 모든 작업이 막힘.\n반면 **모델 추론이 필요한 작업(리서치·분석·delegate_task)은 `--parallel 1` 때문에 한 슬롯을
+두고 줄을 섭니다** — "동시에 끝난다"가 아니라 "총 소요시간이 대략 합산된다"고 예상할 것.
+결과가 섞이는 일은 없습니다(귀속은 정확). `(실측)`
 
 **원인**: `--reasoning-format`이 gemma에 안 맞는 DeepSeek 파서를 강제한다는 초기 가설은
 기각 — `llama-server --help` 확인 결과 기본값 `auto`가 reasoning 지원 템플릿에서 `deepseek`을
 자동 선택하는 정상 동작이었음. 진짜 원인은 `--repeat-penalty`가 기본값 `1.00`(비활성)이었던
-것 — 이례적 설정이 아니라 "아무것도 설정 안 한 상태"였고, 반복 억제가 없다 보니 특정
-프롬프트가 우연히 모델을 못 빠져나오는 반복 루프로 몰아넣었음.
+것 — 이례적 설정이 아니라 \"아무것도 설정 안 한 상태\"였고, 반복 억제가 없다 보니 특정
+프롬프트가 우연히 모델을 못 빠져나가는 반복 루프로 몰아넣었음.
 
-**검증된 대응책**: `--repeat-penalty 1.1`을 걸면 동일 재현 프롬프트에서 `n_decoded=696`에
-정상 종료되고 폭주가 재현되지 않음을 확인 `(실측)`.
-
-**현재 운영 방침(2026-08-08 결정)**: 상시 1.1을 걸어두지 않고 **기본값 1.0으로 운영하다가,
-실제로 폭주 증상이 재현될 때만 1.1로 전환**합니다. 적용 시 (`~/llm-stack/registry.yaml`,
-`models.gemma4.extra_flags`):
+**수정** (`~/llm-stack/registry.yaml`, `models.gemma4.extra_flags`):
 ```
 --jinja --flash-attn on -ngl 99 --parallel 1 --repeat-penalty 1.1
 ```
 `~/llm-stack/bin/llm-switch.sh use gemma4`로 적용. **`registry/gemma4.env`를 직접 고치지
-말 것** — 이 스크립트가 `registry.yaml`을 읽어 매번 재생성함.
+말 것** — 이 스크립트가 `registry.yaml`을 읽어 매번 재생성함.\n결과가 섞이는 일은 없습니다(귀속은 정확). `(실측)`
+
+**검증**: 동일 프롬프트로 재현 시도 → `n_decoded=696`에서 정상 종료, 폭주 재현 안 됨. `(실측)`
 
 ### 7.2 `[SILENT]` 오판 — 우회됨, cron 한정
 
-cron job 시스템 프롬프트에 "알릴 필요 없으면 `[SILENT]`를 반환해 배달을 건너뛰라"는 지침이
+cron job 시스템 프롬프트에 \"알릴 필요 없으면 `[SILENT]`를 반환해 배달을 건너뛰라\"는 지침이
 있는 것으로 보임(왓치독용 기능으로 추정). 단순 일회성 리마인더에서 12B 모델이 이 지침을
 과도하게 일반화해서 매번 `[SILENT]`를 반환 — 응답 생성과 턴 종료는 정상(`finish_reason=stop`)
 이지만 배달만 스킵됨. `cron list`엔 실행 완료 후 정상적으로 사라지므로 겉보기엔 이상 없어
-보임.
+보임.\n로그 확인: `grep \"agent returned \\[SILENT\\]\" ~/.hermes/logs/agent.log`
 
-로그 확인: `grep "agent returned \[SILENT\]" ~/.hermes/logs/agent.log`
-
-**"절대 침묵하지 마" 같은 명시적 지시로도 회피 안 됨(3회 재현, 매번 동일).** 지시로 고칠 수
-있는 문제가 아님.
-
-**범위**: `delegate_task(background=True)`로 동일하게 짧은 응답을 요구했을 때는 `[SILENT]`
-없이 정상 배달됨 — **cron 시스템 프롬프트에 한정된 문제**이고 delegate_task·terminal·일반
+**범위**: `delegate_task(background=True)`로 동일하게 짧은 응답을 요구했을 때는 `[SILENT]` 없이 정상 배달됨 — **cron 시스템 프롬프트에 한정된 문제**이고 delegate_task·terminal·일반
 대화는 영향 없음. `(실측)`
 
-**해법**: 2번 섹션의 `--no-agent` 우회가 유일하게 확인된 대응. LLM 판단 자체를 거치지 않아
-구조적으로 오판이 불가능함.
+**해법**: 2번 섹션의 `--no-agent` 우회가 유일하게 확인된 대응. LLM 판단 자체를 거치지 않아 구조적으로 오판이 불가능함.\n\n---
 
-### 7.3 `/new` 타이핑 인디케이터 — 재현됨, 무해
-
-`/new`(세션 리셋, LLM 호출 불필요) 응답 직후 텔레그램 타이핑 표시가 무기한 지속.
-`is_processing=false`, 게이트웨이 단일 프로세스, 로그 4분+ 무활동 상태에서도 재현 —
-`sendChatAction` 반복 태스크가 취소 안 되는 것으로 추정. 일반 대화 턴 종료 후에는 재현 안
-됨(session_reset 경로 한정). 기능엔 영향 없음. `/restart`로 즉시 해소되나 다음 `/new` 때
-재발 가능.
-
-이슈 등록 후보:
-```
-저장소: NousResearch/hermes-agent, 버전: v0.20.0 (2026.8.3)
-재현: 텔레그램에서 /new 전송 → 응답 즉시 수신 → 입력 중 표시 무기한 지속
-확인: /slots is_processing=false, 게이트웨이 단일 프로세스, 로그 4분+ 무활동
-```
-
----
 
 ## 8. 하드웨어 노트
 
-- `llama-server --parallel 1` — 동시 추론 슬롯 1개. LLM이 필요한 모든 작업(delegate_task,
+- `llama.cpp --parallel 1` — 동시 추론 슬롯 1개. LLM이 필요한 모든 작업(delegate_task,
   cron 턴, goal 턴)이 이 슬롯을 공유해 사실상 직렬화됨. 진짜 동시 처리가 필요하면 `--parallel`
-  상향 + `-c` 재분배 필요하나, 12GB VRAM + 128K 컨텍스트 조합에선 여유가 크지 않음.
-- 로컬 12B는 tool calling·judge 판정 정확도가 프론티어 모델보다 낮음. `/goal`이나
-  `delegate_task`가 이상하게 굴면 모델 능력 문제일 수 있으니 `hermes model`로 해당 역할만
-  원격 API로 돌려서 원인을 분리할 것.
+  상향 + `-c` 재분배 필요하나, 12GB VRAM + 128K 컨텍스트 조합에선 여유가 크지 않음.\n- 로컬 12B는 tool calling·judge 판정 정확도가 프론티어 모델보다 낮음. `/goal`이나
+  delegate_task가 이상하게 굴면 모델 능력 문제일 수 있으니 원격 API로 돌려서 원인을 분리할 것.\
+\n---
 
----
 
 ## 9. Hermes에게 이 지식을 알리기
 
-이 문서를 Hermes가 자동으로 읽지는 않습니다. Hermes 자신의 *행동*을 바꿔야 하는 내용(6·7.2)은
-memory/skill로 넘겨야 하고, 순수 인프라 troubleshooting(5·7.1·8)은 사람만 보면 되므로
-이 문서에만 남겨둡니다.
+이 문서는 Hermes가 자동으로 읽지는 않습니다. 사용자님이 직접 메모리에 저장하거나, 제가 작업 중에 이 문서의 내용을 인지하도록 요청해 주셔야 합니다. 현재는 제가 수동으로 확인한 상태입니다.
 
-**`hermes_snapshot.md`가 그 skill 역할의 첫 버전입니다** — `simple_reminder`(7.2 우회책),
-`workspace_org`(6번 저장 위치 규칙)로 이미 반영돼 있습니다. 다만 이 파일도 Hermes에게
-자동으로 로드되지 않습니다 — 지금은 필요할 때 사람이 직접 참조를 지시하고, 추후 스냅샷을
-최신 상태로 갱신해주는 스킬을 만들 예정입니다.
+**참고**: 새로운 규칙이나 환경 변화가 발생할 때마다 `hermes_snapshot.md`를 최신 상태로 업데이트하며 관리합니다.
+\n---
 
-## 10. 이 레포의 다른 문서
-
-| 문서 | 성격 |
-|---|---|
-| `hermes_snapshot.md` | Hermes 운영 규칙 스냅샷. 9번 참고 — 자동 로드 안 됨. |
-| `build-guide.md` | **외부에서 작성된 원본 구축 가이드(v15)** — 이 환경에 맞게 전부 검증된 것은
-아님. 이 README와 내용이 충돌하면 **README가 우선**이며(예: 모델 quant 표기, 7.1의
-`--repeat-penalty` 운영 방침), build-guide 쪽 내용은 실제로 따라 하기 전에 재검증 필요.
-
----
 
 ## 부록 — 무엇이 무엇으로 대체됐는가 (삭제된 엔진 기준)
 
@@ -288,22 +248,14 @@ memory/skill로 넘겨야 하고, 순수 인프라 troubleshooting(5·7.1·8)은
 | `state/scenarios/audit_v1.json` | `/goal` 또는 kanban 카드 |
 | `docs/orchestration_protocol.md` (상태 전이 규칙) | `/goal` judge 루프 |
 
-**애초에 "알림이 안 온다"고 느꼈던 근본 원인**은 Hermes가 아니라 `core_engine.py`의 버그였음.
-`run_orchestration()`이 `self.state`를 메모리에 한 번만 로드하고 이후 갱신하지 않아 종료
+**애초에 \"알림이 안 온다\"고 느꼈던 근본 원인**은 Hermes가 아니라 `core_engine.py`의 버그였음.\n`run_orchestration()`이 `self.state`를 메모리에 한 번만 로드하고 이후 갱신하지 않아 종료
 조건이 never true가 되는 무한루프였고, `notify_on_complete=true`는 프로세스 **종료 시점**에
-발화하는데 그 프로세스가 종료된 적이 없어서 알림도 없었음 (커밋 `5102326` 참고).
+발화하는데 그 프로세스가 종료된 적이 없어서 알림도 없었음 (커밋 `5102326` 참고).\n\n---
+
 
 ## 부록 — 이벤트 훅 (필요시)
 
-지금까지 테스트한 범위에선 내장 알림만으로 충분해서 안 씀. 더 세밀한 제어가 필요해지면
-`~/.hermes/config.yaml`:
-```yaml
-hooks:
-  outbound:
-    - name: tg-notify
-      url: <webhook-url>
-      events: [subagent_stop, on_session_end]
-      timeout: 10
-```
-이벤트 종류: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`,
+지금까지 테스트한 범위에선 내장 알림만으로 충분해서 안 쓰는 중입니다. 더 세밀한 제어가 필요해지면
+`~/.hermes/.env`:\n```yaml
+hooks:\n  outbound:\n    - name: tg-notify\n      url: <webhook-url>\n      events: [subagent_stop, on_session_end]\n      timeout: 10\n```\n이벤트 종류: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`,\
 `on_session_start`, `on_session_end`, `subagent_start`, `subagent_stop`
