@@ -58,6 +58,13 @@ chmod +x ~/.hermes/scripts/<이름>.sh
 hermes cron create "<시간>" --no-agent --script <이름>.sh --deliver telegram:<chat_id> --name <이름>
 ```
 
+**콘솔 없이 텔레그램에서 그대로 시켜도 됩니다(실측 확인됨)** — Hermes가 스크립트 생성부터
+`--no-agent` 등록까지 스스로 처리합니다:
+```
+1분 뒤에 "<메시지>"라고 딱 한 번 출력하는 스크립트를 ~/.hermes/scripts/ 에 만들고,
+그걸로 no-agent cron job을 등록해줘.
+```
+
 **CLI로 직접 관리:**
 ```bash
 hermes cron create "every 2h" "<지시>" --deliver telegram:<chat_id>
@@ -220,6 +227,18 @@ grep "agent returned \[SILENT\]" ~/.hermes/logs/agent.log
 재현, 매번 동일하게 스킵).** 지시로 고칠 수 있는 문제가 아니므로, 대응은 2번 섹션의
 `--no-agent` 우회가 유일하게 확인된 해법. `--no-agent` job은 LLM 판단 자체를 거치지 않아
 이 오판이 구조적으로 불가능함 — 실측으로 정상 배달 확인.
+
+**범위 확정**: `delegate_task(background=True)`로 동일하게 "sleep 30 실행하고 끝나면 딱
+'완료'라고만 답해줘"처럼 짧은 응답을 요구했을 때는 `[SILENT]` 없이 정상 배달됨(실측
+확인됨). 즉 **이 문제는 "짧은 응답 전반"이 아니라 cron 시스템 프롬프트의 워치독형 지침에
+한정**됨 — cron 외 경로(delegate_task, terminal, 일반 대화)에서는 재현되지 않음.
+
+**텔레그램만으로 `--no-agent` 우회도 가능함(실측 확인됨)** — 콘솔 없이 다음과 같이
+시키면 Hermes가 스스로 스크립트 파일을 만들고 `--no-agent` cron으로 등록함:
+```
+1분 뒤에 "<메시지>"라고 딱 한 번 출력하는 스크립트를 ~/.hermes/scripts/ 에 만들고,
+그걸로 no-agent cron job을 등록해줘.
+```
 
 ---
 
