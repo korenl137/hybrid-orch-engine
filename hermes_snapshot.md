@@ -8,7 +8,7 @@
 
 ### Designer-Executor Model
 *   **Hermes:** 고도의 추론, 코드 설계, 아키텍처 분석, 데이터 처리 및 워크플로우 기획 담당.
-*   **User:** 로컬 환경에서의 최종 실행 승인, 물리적 하드웨어 제어, GPU 기반의 실질적 연산 수행 담당.
+*   **User:** Yun Ji (korenl137@skku.edu) - 로컬 환경에서의 최종 실행 승인, 물리적 하드웨어 제어, GPU 기반의 실질적 연산 수행 담당.
 
 ### Stateful Orchestration
 *   모든 복잡한 프로젝트는 `project_status.json`과 같은 공유 상태 파일을 통해 현재 단계를 추적하고 컨텍스트를 유지합니다.
@@ -42,13 +42,14 @@
 ### Development Stack
 *   **Language:** Python 3.11
 *   **Package Manager:** `uv`
+*   **Models:** Gemma 4 series (Gemma-4-12b-it-qat-q4_0.gguf active)
 *   **Data Tools:** Polars, etc.
 
 ## 4. Active Skill Inventory (활성화된 스킬셋)
 
 | Skill Name | Category | Description |
 | :--- | :--- | :--- |
-| **simple_reminder** | Productivity | 단순 알림 요청 시 `no_agent` 크론작업으로 효율적으로 처리 |
+| **simple_reminder** | Productivity | 단순 알림 요청 시 `no-agent` 크론작업으로 효율적으로 처리 |
 | **workspace_org** | Productivity | 프로젝트별 산출물 경로 준수 및 공유 자원 관리 절차 수행 |
 
 *이 문서는 시스템의 핵심 운영 정책을 담고 있으며, 새로운 규칙이나 환경 변화가 발생할 때마다 업데이트됩니다.*
