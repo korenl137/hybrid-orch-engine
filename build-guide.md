@@ -3,7 +3,7 @@
 > 대상 하드웨어(SFF): RTX 4070 SUPER 12GB / DDR5 32GB (WSL 24GB 가변 할당)
 > 구성: 연구실 SFF(Windows 11 + WSL2 Ubuntu 24.04, 호스트) ↔ 클라이언트(Tailscale + Orca SSH)
 >
-> v15(Gemma4-12B + Qwen3.6-35B-A3B 2모델 체제)에서 이어지는 개정판입니다. `moe-hardware-review.md`
+> v15(Gemma4-12B + Qwen3.6-35B-A3B 2모델 체제)에서 이어지는 개정판입니다. `reviews/moe-hardware-review.md`
 > 검토 결과 다음과 같이 방향을 바꿨습니다:
 > - **메인 모델을 Gemma4-12B → Gemma4-26B-A4B(MoE)로 교체.** 같은 Gemma 계열이라 비전·
 >   `--repeat-penalty` 튜닝 경험을 그대로 이관할 수 있고, 12GB VRAM 대비 오프로드 부담도
@@ -21,7 +21,7 @@
 ---
 
 > **문서 상태 안내 (README 우선)**: 이 문서는 원래 외부에서 받은 v15 원본을, 이번 세션의
-> 자체 분석(`moe-hardware-review.md`)을 반영해 **v16으로 직접 개정**한 것입니다. 아직 SFF에
+> 자체 분석(`reviews/moe-hardware-review.md`)을 반영해 **v16으로 직접 개정**한 것입니다. 아직 SFF에
 > 실제로 적용되지 않았으므로 README 기준으로는 전부 미검증입니다. `README.md`와 내용이
 > 충돌하면 **`README.md`가 우선**합니다. 특히 아래 항목은 실제로 따라 하기 전 재확인하세요:
 > - **모델 quant**: 현재(구) 운영 모델은 README 기준 **Gemma 4-12B (IT, QAT Q4_0)**입니다.
