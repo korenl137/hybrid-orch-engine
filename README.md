@@ -8,9 +8,12 @@
 전부 아래 환경에서 직접 텔레그램으로 테스트하고 로그로 검증했습니다. 굵게 표시 안 된 서술은
 공식 동작, `(실측)` 표시는 이 환경에서 직접 재현·확인한 것입니다.
 
-**환경**: WSL2 / Hermes Agent v0.20.0 / Gemma 4-12B (IT, QAT Q4_0) (llama-server, `--parallel 1`,
-`-c 131072`) / RTX 4070 SUPER 12GB / 텔레그램 게이트웨이. `--repeat-penalty 1.1`로 운영 중
-(생성 폭주 대응) — 7.1 참고.
+**환경**: WSL2 / Hermes Agent v0.20.0 / **Gemma4-26B-A4B (QAT UD-Q4_K_XL, MoE)** (llama-server,
+`-np 1`, `-c 65536`, `--n-cpu-moe 12`) / RTX 4070 SUPER 12GB / 텔레그램 게이트웨이. 포트는
+8000으로 통일. `--repeat-penalty`는 기본값(비활성) 유지 중 — 생성 폭주 재현 안 됨, 부록
+"모델 전환 기록" 참고. 이전 운영 모델(Gemma 4-12B, `--repeat-penalty 1.1`)은
+`registry.yaml`의 `gemma4-12b` 키로 남아있어 `llm-switch.sh use gemma4-12b`로 언제든
+전환 가능.
 
 **빠른 참조** — 하고 싶은 일 -> 어디를 볼지:
 
@@ -22,6 +25,7 @@
 | Hermes가 먼저 말 걸게 하기 | 4 |
 | 게이트웨이/모델이 멈췄을 때 | 5 |
 | 결과물을 어디에 저장할지 | 6 |
+| 지금 어떤 모델 쓰는지 확인 / 모델 바꾸기 | 부록 "모델 실사용 가이드" |
 
 ---
 
@@ -156,7 +160,7 @@ cron·목표 완료 결과가 어디로 갈지는 "home channel"이 결정합니
 ```bash
 pgrep -af llama-server
 kill -9 <PID>
-~/llm-stack/bin/llm-switch.sh use gemma4      # registry.yaml 기준으로 재기동
+~/llm-stack/bin/llm-switch.sh use gemma4-26b-a4b      # registry.yaml 기준으로 재기동
 ```
 
 진행 중인 턴이 있으면 재시작이 그 턴이 끝날 때까지 기다립니다 — 폭주 중인 생성이 있으면
@@ -295,3 +299,99 @@ hooks:
 
 이벤트 종류: `pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`,
 `on_session_start`, `on_session_end`, `subagent_start`, `subagent_stop`
+
+---
+
+## 부록 — 모델 실사용 가이드
+
+### 지금 어떤 모델이 떠 있는지 확인
+```bash
+curl -s http://localhost:8000/v1/models | grep -o '"id":"[^"]*"'
+systemctl status llm@gemma4-26b-a4b   # 또는 llm@gemma4-12b
+```
+텔레그램에서 직접 물어봐도 됩니다: `너 지금 어떤 모델로 동작하고 있어?`
+
+### 모델 전환
+```bash
+sudo systemctl stop llm@<현재키>          # 진행 중인 응답 있으면 끊기니 /slots로 idle 확인 후
+~/llm-stack/bin/llm-switch.sh use gemma4-26b-a4b   # 메인 (비전, 생성 속도 우선)
+~/llm-stack/bin/llm-switch.sh use gemma4-12b       # 대안 (프롬프트 처리 속도, VRAM 여유 우선)
+curl -s http://localhost:8000/v1/models             # 전환 확인
+```
+`llm-switch.sh use`는 내부적으로 systemd 서비스를 재시작합니다 — **idle 상태(`curl
+localhost:8000/slots`의 `is_processing: false`)에서 전환**하는 걸 권장합니다. 전환해도
+포트(8000)·Hermes `.env`는 그대로라 게이트웨이 재시작은 필요 없습니다(모델 파일 경로가
+바뀌었으면 `~/.hermes/config.yaml`의 `model:` 필드도 맞춰야 함 — 이번엔 이미 반영됨).
+
+### 언제 어느 쪽을 쓸지 (2026-08-08 실측 기준)
+
+| 상황 | 추천 |
+|---|---|
+| 평소 전체 사용 (알림·cron·`/goal`·리서치·비전·간단한 코딩) | **gemma4-26b-a4b** (기본값) |
+| 새 세션 첫 턴/컨텍스트 압축 직후가 유독 느리게 느껴짐 | `gemma4-12b`로 전환해서 비교 — pp512가 2.6배 빠름(3232 vs 1235 t/s), 시스템 프롬프트 재처리 비용이 체감 지연의 큰 부분일 수 있음 |
+| VRAM 부족/OOM 우려 | `gemma4-12b`가 여유 더 큼(약 1.9~3GB vs 26B-A4B의 약 1.8GB) — 그래도 부족하면 26B-A4B의 `--n-cpu-moe`를 5씩 올려 재시도 |
+| 레포 전체 탐색·멀티스텝 이슈 해결 같은 진짜 에이전틱 코딩이 필요해짐 | 둘 다 아님 — build-guide.md 부록 A(Qwen3.6-35B-A3B 조건부 재도입, RAM 28GB+ 필요) 참고 |
+| 새 모델 도입을 고민할 때 | 커뮤니티 벤치마크 수치를 그대로 믿지 말 것 — 실제로 이 SFF(12GB + `--n-cpu-moe` 오프로드)에서 26B-A4B는 커뮤니티가 말하는 "거의 2배 빠름"이 아니라 **12%** 빠른 것으로 실측됨. 새 후보는 반드시 `llama-bench`로 이 하드웨어에서 직접 재볼 것 |
+
+### 문제 생겼을 때
+- 응답 안 옴 / 슬롯 계속 물려있음 → 5장의 `kill -9` 절차, 이때 `llm-switch.sh use gemma4-26b-a4b`로 재기동
+- 생성 폭주 재현되면 → `registry.yaml`의 `gemma4-26b-a4b.extra_flags`에 `--repeat-penalty 1.1` 추가 (7.1 참고, 아직 26B-A4B에서는 재현 안 됨)
+- 비전이 CUDA에서 죽으면(SFF에선 아직 안 나왔지만) → `registry.yaml`의 `gemma4-26b-a4b.mmproj_path`를 비우고(`llm-launch.sh`가 `MMPROJ_PATH`가 비어있으면 `--mmproj` 자체를 안 붙임) 텍스트 전용으로 운영 (build-guide.md 3-4)
+
+---
+
+## 부록 — 모델 전환 기록 (2026-08-08): Gemma4-12B → Gemma4-26B-A4B
+
+`build-guide.md` v16 계획을 실제 SFF에 적용하고 실측한 기록입니다. 절차는 build-guide.md,
+전환 근거는 `reviews/moe-hardware-review.md` 참고.
+
+**변경 내용**:
+- 메인 모델: Gemma4-12B (Dense) → **Gemma4-26B-A4B (MoE, QAT UD-Q4_K_XL)**
+- `registry.yaml` 키: `gemma4-26b-a4b`(메인) / `gemma4-12b`(대안). 이전엔 `gemma4` /
+  `gemma4-12b-legacy`로 구분했으나, 12B도 실사용 가치가 있어(아래 벤치마크 참고)
+  "legacy"라는 이름이 오해를 부른다고 판단해 **무게 기준 이름으로 정리**했습니다.
+- 포트: 8000으로 통일 (전환 작업 중 실제 운영 포트가 8001로 드리프트돼 있던 걸 발견해 정정)
+- `--n-cpu-moe 12`, `-c 65536`, `--repeat-penalty` 기본값(비활성) 유지
+
+**전환 명령**:
+```bash
+~/llm-stack/bin/llm-switch.sh use gemma4-26b-a4b   # 메인
+~/llm-stack/bin/llm-switch.sh use gemma4-12b        # 대안/롤백
+```
+
+**실측 검증 (build-guide.md 12-3 체크리스트 기준, 전부 `(실측)`)**:
+
+| 테스트 | 결과 |
+|---|---|
+| 비전(mmproj) CUDA 크래시 | ✅ 재현 안 됨 (`ggml-org/llama.cpp` #21402은 RTX 5090 한정으로 보이며, RTX 4070 SUPER에서는 이미지 처리 정상) |
+| 단일 도구 호출 / 멀티스텝 에이전트 | ✅ 정상 (web_search, terminal 연쇄 호출 모두 확인) |
+| 긴 컨텍스트 (65536) | ✅ 16K자 문서에 묻힌 수치 정확히 recall |
+| 메모리 (게이트웨이 재시작 후) | ✅ 유지됨 |
+| 브라우저 | ✅ 정상 (agent-browser가 Node.js/Chrome을 그 자리에서 자동 설치) |
+| 생성 폭주 재현 (7.1 참고) | ✅ 재현 안 됨 — `--repeat-penalty` 기본값으로 운영 가능 |
+
+**벤치마크** (`llama-bench`, RTX 4070 SUPER 12GB, 동일 빌드 `6ea215d`):
+
+| 모델 | pp512 | tg128 |
+|---|---|---|
+| Gemma4-12B (Dense) | 3232 t/s | 52.8 t/s |
+| Gemma4-26B-A4B (`--n-cpu-moe 12`) | 1235 t/s | **59.1 t/s** |
+
+프롬프트 처리는 12B가 2.6배 빠르지만, **생성 속도는 26B-A4B가 오히려 더 빠릅니다**
+(MoE 특성상 토큰당 활성 파라미터가 적어서). `--parallel 1`로 직렬화되는 이 환경에서는
+생성 속도가 체감 대기시간에 더 크게 기여하므로, 짧은 대화 위주 워크로드에선 나쁘지 않은
+트레이드오프입니다.
+
+**코딩 품질 직접 비교** (동일 프롬프트 "피보나치 메모이제이션 구현 + 테스트 코드"를
+두 모델에 각각 실행): 처음엔 둘 다 `if __name__ == "__main__":`의 언더스코어가 사라진
+것처럼 보여 버그로 의심했으나, `state.db`에서 원본 응답을 직접 조회하니 **둘 다 코드
+자체는 정확했고, 터미널 렌더러가 `__텍스트__`를 마크다운 강조로 오인해 지워 보인
+표시 문제**였습니다(모델 결함 아님 — 결과 확인 시 렌더링 레이어를 의심할 것).
+다만 실제 품질 차이는 있었습니다: **26B-A4B는 `functools.lru_cache`(표준 라이브러리
+재사용)를 썼고 테스트도 `assert`로 실제 검증**한 반면, **12B는 memo dict를 직접
+구현했고 테스트는 `print`만 하고 검증하지 않았습니다.** 1회 비교라 일반화하긴 이르지만,
+이 케이스에서는 26B-A4B가 더 나은 코드를 냈습니다.
+
+**VRAM 실측**: 12B 단독 구동 시 여유 약 1.9~3GB, 26B-A4B(`--n-cpu-moe 12`, 비전 포함)
+구동 시 여유 약 1.8GB — build-guide.md 3-4의 추정치보다 전반적으로 빠듯합니다. 추가로
+VRAM을 확보해야 하면 `--n-cpu-moe`를 5 단위로 올리세요(대신 tg 속도가 소폭 느려집니다).

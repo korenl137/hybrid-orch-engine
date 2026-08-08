@@ -34,15 +34,39 @@
 
 ## 3. System Environment (기술 환경)
 
+> **마지막 실측 확인: 2026-08-08** (SFF에 원격 SSH로 직접 접속해 확인한 값. 이전 버전은
+> 미검증 상태로 부정확한 값이 섞여 있었음 — 아래는 실측으로 교체한 것. 같은 날 안에
+> Gemma4-12B → 26B-A4B 전환도 실행·검증됨, 상세 근거·벤치마크는 `README.md` 부록 "모델
+> 전환 기록" 참고)
+
 ### Infrastructure
-*   **OS:** Windows Subsystem for Linux (WSL)
-*   **CPU/RAM:** AMD Ryzen 9 7900 / 23GiB RAM
-*   **GPU:** NVIDIA RTX 4070 SUPER (CUDA 12.6 활성화 완료)
+*   **OS:** Windows Subsystem for Linux (WSL), 호스트명 `Korenl-SFF`
+*   **CPU/RAM:** 물리 RAM 32GB, WSL 할당 23GiB (`.wslconfig`: `memory=24GB, processors=12, swap=12GB`)
+*   **GPU:** NVIDIA RTX 4070 SUPER, VRAM 12,282 MiB (driver 610.57.01, CUDA UMD 13.3) —
+    "CUDA 12.6 활성화 완료"는 이전 버전의 미검증 서술이었음, 실측 드라이버 기준으로 정정
+*   **VRAM 실사용량**: Gemma4-12B 단독 구동 시 여유 약 1.9~3GB, **Gemma4-26B-A4B
+    (`--n-cpu-moe 12`, 비전 포함) 구동 시 여유 약 1.8GB** — 둘 다 build-guide.md 3-4의
+    추정치보다 빠듯함. 추가 여유가 필요하면 `--n-cpu-moe`를 5 단위로 올릴 것(tg 속도 소폭 하락).
 
 ### Development Stack
 *   **Language:** Python 3.11
 *   **Package Manager:** `uv`
-*   **Models:** Gemma 4 series (Gemma-4-12b-it-qat-q4_0.gguf active)
+*   **Models:** **Gemma4-26B-A4B (QAT UD-Q4_K_XL, MoE) — 현재 메인, 2026-08-08 전환.**
+    Gemma4-12B(Dense)는 대안/비교용으로 유지.
+*   **모델 서버**: `llama-server`, systemd 템플릿 유닛 — 현재 `llm@gemma4-26b-a4b.service`
+    활성(root 단위, 재시작 시 `sudo` 필요) — `~/llm-stack/bin/llm-switch.sh use <키>`로 전환,
+    `~/llm-stack/registry.yaml`이 단일 소스. 키 이름은 `gemma4-26b-a4b` / `gemma4-12b`로
+    **무게 기준 명명**(이전엔 `gemma4-12b-legacy`로 "legacy" 딱지를 붙였으나, 12B도
+    프롬프트 처리 속도·VRAM 여유에서 실사용 가치가 있어 정정함 — 벤치마크는 README 참고)
+*   **포트**: **8000** (2026-08-08 기준. 이전엔 8001로 드리프트돼 있었고, README의 "포트 8000
+    통일 방침"과 불일치했던 것을 `registry.yaml` + `~/.hermes/config.yaml` 양쪽 수정으로 정정함)
+*   **게이트웨이**: `hermes-gateway.service`는 **사용자 단위 systemd**(`~/.config/systemd/user/`,
+    sudo 불필요) — `hermes gateway restart`로 재시작. 단, 재시작 시 진행 중이던 서브에이전트
+    턴은 "우아하게 대기"한다는 메시지와 달리 즉시 끊길 수 있음(2026-08-08 실측, 컨텍스트
+    압축 중 스폰된 감사 서브에이전트 3개가 재시작과 동시에 중단됨) — 트래픽 없는 시간대에
+    재시작할 것.
+*   **비전(mmproj) CUDA 크래시 리스크**: `ggml-org/llama.cpp` #21402 이슈는 RTX 4070 SUPER에서
+    재현 안 됨(2026-08-08 실측, 이미지 처리 정상) — 비전 켜고 운영 가능.
 *   **Data Tools:** Polars, etc.
 
 ## 4. Active Skill Inventory (활성화된 스킬셋)
